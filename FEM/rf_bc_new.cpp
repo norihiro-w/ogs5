@@ -57,6 +57,9 @@ extern void remove_white_space(std::string*);
 
 #include "BoundaryCondition.h"
 
+#include "DistributionTools.h"
+#include "files0.h"
+
 #ifndef _WIN32
 #include <cstdio>
 #include <cstdlib>
@@ -163,6 +166,9 @@ CBoundaryCondition::CBoundaryCondition() :
 	_isConstrainedBC = false;
 	_isSeepageBC = false;
 	_isSwitchBC = false;
+	is_MatGr_set = false; //NW
+	TimeInterpolation = 0;
+    ele_interpo_method = "AVERAGE"; //NW	
 }
 
 // KR: Conversion from GUI-BC-object to CBoundaryCondition
@@ -192,6 +198,7 @@ CBoundaryCondition::CBoundaryCondition(const BoundaryCondition* bc)
 		std::cout << "Error in CBoundaryCondition() - DistributionType \""
 		          << FiniteElement::convertDisTypeToString(this->getProcessDistributionType())
 				  << "\" currently not supported." << "\n";
+    is_MatGr_set = false; //NW
 }
 
 /**************************************************************************
@@ -408,16 +415,27 @@ std::ios::pos_type CBoundaryCondition::Read(std::ifstream* bc_file,
 				}
 				//        bc_file->ignore(MAX_ZEILE,'\n');
 			}
+			if (line_string.find("GRADIENT") != std::string::npos) // 6/2012  JOD
+			{
+				this->setProcessDistributionType(FiniteElement::GRADIENT);
+				in >> gradient_ref_depth;
+				in >> gradient_ref_depth_value;
+				in >> gradient_ref_depth_gradient;
+				in.clear();
+			}
+			if (line_string.find("INITIAL") != std::string::npos) //NW
+			{
+				this->setProcessDistributionType(FiniteElement::INITIAL);
+			}
+			if (line_string.find("ELEMENT") != std::string::npos) //NW
+			{
+				this->setProcessDistributionType(FiniteElement::ELEMENT);
+				in >> fname >> ele_interpo_method;
+				fname = FilePath + fname;
+				in.clear();
+			}
 		}
 
-		if (line_string.find("GRADIENT") != std::string::npos) // 6/2012  JOD
-		{
-			this->setProcessDistributionType(FiniteElement::GRADIENT);
-		    in >> gradient_ref_depth;
-            in >> gradient_ref_depth_value;
-            in >> gradient_ref_depth_gradient;
-			in.clear();
-		}
 
 		// Time dependent function
 		//..Time dependent curve ............................................
@@ -602,6 +620,31 @@ std::ios::pos_type CBoundaryCondition::Read(std::ifstream* bc_file,
 				this->_constrainedBC.push_back(temp);
 			in.clear();
 		}
+		//....................................................................
+		// assignment of BC on mesh nodes connected to certain material elements NW
+        if (line_string.find("$MAT_ID") != std::string::npos)
+        {
+            in.str(readNonBlankLineFromInputStream(*bc_file));
+            in >> MatGr;
+            is_MatGr_set = true;
+            in.clear();
+            continue;
+        }
+		if (line_string.find("$TIME_INTERPOLATION") != std::string::npos)
+		{
+			in.str(readNonBlankLineFromInputStream(*bc_file));
+			in >> interpolation_method;
+			if (interpolation_method.find("LINEAR") != std::string::npos)
+			{
+				this->TimeInterpolation = 0;
+			}
+			if (interpolation_method.find("PIECEWISE_CONSTANT") != std::string::npos)
+			{
+				this->TimeInterpolation = 1;
+			}
+			in.clear();
+			continue;
+		}		
 		//....................................................................
 
 	}
@@ -997,6 +1040,72 @@ inline void CBoundaryCondition::PatchAssign(long ShiftInNodeVector)
 	} // eof
 }
 
+/**************************************************************************
+   FEMLib-Method:
+   Task:
+   Programing:
+   05/2012 NW Implementation
+**************************************************************************/
+void CBoundaryCondition::SetByElementValues(long ShiftInNodeVector)
+{
+    // File handling
+    std::ifstream d_file (fname.c_str(), std::ios::in);
+    if (!d_file.is_open())
+    {
+        std::cout << "! Error in CBoundaryCondition::SetByElementValues(): Could not find file " << fname << std::endl;
+        abort();
+    }
+
+    CRFProcess* pcs = this->getProcess();
+    //MeshLib::CFEMesh* msh = pcs->m_msh;
+    // read element values
+    std::vector<long> bc_ele_ids;
+    std::map<long, double> map_eleId_val;
+    std::string line_string;
+    std::stringstream in;
+    size_t ele_id;
+    double val;
+    while (!d_file.eof())
+    {
+        line_string = GetLineFromFile1(&d_file);
+        if(line_string.find("#STOP") != std::string::npos)
+            break;
+
+        in.str(line_string);
+        in >> ele_id >> val;
+        map_eleId_val[ele_id] = val;
+        bc_ele_ids.push_back(ele_id);
+        in.clear();
+    }
+
+    // get a list of nodes connecting elements
+    std::vector<long> vec_nodes;
+    pcs->m_msh->GetNODOnELE(bc_ele_ids, vec_nodes);
+
+    // set BC
+    CRFProcess* m_pcs = PCSGet(convertProcessTypeToString(this->getProcessType()));
+    const size_t n_nodes = vec_nodes.size();
+    CBoundaryConditionNode* m_node_value = NULL;
+    EleToNodeInterpolationMethod::type iterpo_type = EleToNodeInterpolationMethod::VOLUME_WEIGHTED;
+    if (ele_interpo_method.find("SHAPE")!=std::string::npos) {
+        iterpo_type = EleToNodeInterpolationMethod::GAUSS_EXTRAPOLATION;
+    }
+    for (size_t i=0; i<n_nodes; i++) {
+        long nod_id = vec_nodes[i];
+        double v = getNodalValueFromElementValue(*pcs, map_eleId_val, iterpo_type, nod_id);
+
+        m_node_value = new CBoundaryConditionNode;
+        m_node_value->conditional = false;
+        m_node_value->msh_node_number = nod_id + ShiftInNodeVector;
+        m_node_value->geo_node_number = nod_id;
+        m_node_value->node_value = v;
+        m_node_value->CurveIndex = _curve_index;
+        m_pcs->bc_node.push_back(this);
+        m_pcs->bc_node_value.push_back(m_node_value);
+    }
+
+}
+
 CBoundaryConditionsGroup::CBoundaryConditionsGroup(void)
 {
 	msh_node_number_subst = -1;           //
@@ -1012,6 +1121,40 @@ CBoundaryConditionsGroup::~CBoundaryConditionsGroup(void)
 	   group_vector.pop_back();
 	 */
 	//  group_vector.clear();
+}
+
+void setDistributionData(CBoundaryCondition* bc, DistributionData &distData)
+{
+	distData.dis_type = bc->getProcessDistributionType();
+	distData.geo_obj = bc->getGeoObj();
+	distData.geo_name = bc->getGeoName();
+	distData.geo_type = bc->getGeoType();
+	switch (bc->getProcessDistributionType()) {
+	case FiniteElement::CONSTANT:
+		distData.dis_parameters.push_back(bc->getGeoNodeValue());
+		break;
+	case FiniteElement::LINEAR:
+		distData._DistribedBC = bc->getDistribedBC();
+		distData._PointsHaveDistribedBC = bc->getPointsWithDistribedBC();
+		break;
+	case FiniteElement::GRADIENT:
+		distData.dis_parameters.push_back(bc->gradient_ref_depth);
+		distData.dis_parameters.push_back(bc->gradient_ref_depth_value);
+		distData.dis_parameters.push_back(bc->gradient_ref_depth_gradient);
+		break;
+	case FiniteElement::FUNCTION:
+		distData.linear_f = bc->dis_linear_f;
+		break;
+	default:
+		break;
+	}
+	distData.mesh_type_name = bc->getMeshTypeName();
+	if (bc->getMeshTypeName()!="NODE") {
+		distData.mesh_node_id = bc->getMeshNodeNumber();
+	}
+	if (bc->getExcav() > 0 || bc->isMatGrSet()) {
+		distData.mat_id = bc->getExcavMatGr();
+	}
 }
 
 /**************************************************************************
@@ -1074,6 +1217,7 @@ void CBoundaryConditionsGroup::Set(CRFProcess* pcs, int ShiftInNodeVector,
 	}
 
 	FiniteElement::PrimaryVariable primary_variable(FiniteElement::convertPrimaryVariable(_pcs_pv_name));
+	int pv_id = pcs->GetNodeValueIndex(_pcs_pv_name);
 	std::list<CBoundaryCondition*>::const_iterator p_bc = bc_list.begin();
 
 	clock_t start_time (clock());
@@ -1158,6 +1302,46 @@ void CBoundaryConditionsGroup::Set(CRFProcess* pcs, int ShiftInNodeVector,
 				continue;
 			}
 			//................................................................
+        if (bc->getProcessDistributionType() == FiniteElement::ELEMENT) //NW
+        {
+            bc->SetByElementValues(ShiftInNodeVector);
+            ++p_bc;
+            continue;
+        }
+		DistributionData distData;
+		setDistributionData(bc, distData);
+		//------------------------------------------------------------------
+		// Detect mesh nodes for this BC
+		//------------------------------------------------------------------
+		nodes_vector.clear();
+		getNodesOnDistribution(distData, *m_msh, nodes_vector);
+		if (!nodes_vector.empty())
+			printf( "-> %d nodes are found for this BC\n", nodes_vector.size());
+		//------------------------------------------------------------------
+		// Calculate BC values
+		//------------------------------------------------------------------
+		node_value.resize(nodes_vector.size());
+		setDistribution(distData, *m_msh, nodes_vector, node_value);
+		if (bc->getProcessDistributionType() == FiniteElement::INITIAL) {
+			for (size_t i=0; i<nodes_vector.size(); i++)
+				node_value[i] = pcs->GetNodeValue(nodes_vector[i], pv_id);
+		}
+		//------------------------------------------------------------------
+		// create BC node
+		//------------------------------------------------------------------
+		const size_t nodes_vector_size (nodes_vector.size());
+		for (size_t i(0); i < nodes_vector_size; i++)
+		{
+			m_node_value = new CBoundaryConditionNode();
+			m_node_value->msh_node_number = nodes_vector[i] + ShiftInNodeVector;
+			m_node_value->geo_node_number = nodes_vector[i];
+			m_node_value->node_value = node_value[i];
+			m_node_value->CurveIndex = bc->getCurveIndex();
+			m_node_value->pcs_pv_name = _pcs_pv_name;
+			pcs->bc_node.push_back(bc);
+			pcs->bc_node_value.push_back(m_node_value);
+		}
+#if 0
 			if (bc->getGeoType() == GEOLIB::POINT)
 			{
 			  //05.2012. WW
@@ -1599,6 +1783,7 @@ void CBoundaryConditionsGroup::Set(CRFProcess* pcs, int ShiftInNodeVector,
 				//WW group_vector.push_back(m_node_value);
 				//WW bc_group_vector.push_back(bc); //OK
 			}
+#endif
 			//------------------------------------------------------------------
 			// FCT types //OK
 			if (bc->fct_name.size() > 0)

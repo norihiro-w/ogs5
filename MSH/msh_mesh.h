@@ -413,6 +413,7 @@ public:
 
 	/** @} */  // close doxygen group
 
+	void GetNODOnELE(const std::vector<long> &vec_ele, std::vector<long> &vec_nod) const;
 	//....................................................................
 #ifdef ObsoleteGUI //WW 03.2012
 	// QUAD->HEX

@@ -202,6 +202,8 @@ const std::list<std::string> getAllPrimaryVariableNames();
 	NODESCONSTANT,                        // IC (for DOMAIN keyword)
 	CLIMATE,	// climate data (by NB)
 	RECHARGE,	// MW
+	ELEMENT,
+	INITIAL,
 	// Sort of Neumann BC //WW
 	// make sure that this is always the last entry (important for iterating over the enum entries)!
 	// make sure that this is always the last entry (important for iterating over the enum entries)!
@@ -278,7 +280,19 @@ enum SolidReactiveSystem
 SolidReactiveSystem convertSolidReactiveSystem( const std::string& reactive_string);
 std::string convertSolidReactiveSystemToString(SolidReactiveSystem reactive_system);
 
+enum SourceTermType
+{
+	INVALID_ST_TYPE = 0,
+	SOURCE,
+	NEUMANN
+};
+
+SourceTermType convertSTType(const std::string& st_type_string);
+
+std::string convertSTTypeToString(SourceTermType st_type);
+
 } // end namespace FiniteElement
+
 
 struct TimType
 {

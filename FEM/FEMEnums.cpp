@@ -404,6 +404,10 @@ DistributionType convertDisType(const std::string& dis_type_string)
 		return FUNCTION;                              //24.08.2011. WW
 	if (dis_type_string.compare("TRANSFER_SURROUNDING") == 0)
 		return TRANSFER_SURROUNDING;
+	if (dis_type_string.compare("ELEMENT") == 0)
+		return ELEMENT;
+	if (dis_type_string.compare("INITIAL") == 0)
+		return INITIAL;
 	else
 	{
 		std::cout << "convertDisType #" << dis_type_string << "# not found"
@@ -459,6 +463,10 @@ std::string convertDisTypeToString(DistributionType dis_type)
 		return "FUNCTION";         //24.08.2011. WW
 	if (dis_type == TRANSFER_SURROUNDING)
 		return "TRANSFER_SURROUNDING";
+    if (dis_type == INITIAL)
+        return "INITIAL";
+    if (dis_type == ELEMENT)
+        return "ELEMENT";
 
 	return "INVALID_DIS_TYPE";
 }
@@ -494,6 +502,25 @@ ErrorMethod convertErrorMethod(const std::string& error_method_string)
 	}
 	return INVALID_ERROR_METHOD;
 }
+
+SourceTermType convertSTType(const std::string& str)
+{
+	if (str.compare("SOURCE") == 0)
+		return SOURCE;
+	if (str.compare("NEUMANN") == 0)
+		return NEUMANN;
+	return INVALID_ST_TYPE;
+}
+
+std::string convertSTTypeToString(SourceTermType st_type)
+{
+	if (st_type == SOURCE)
+		return "SOURCE";
+	if (st_type == NEUMANN)
+		return "NEUMANN";
+	return "INVALID_ST_TYPE";
+}
+
 
 FrictionPhase convertFrictionPhase( const std::string& friction_string)
 {

@@ -4,6 +4,7 @@ set( HEADERS
 	Constrained.h
 	conversion_rate.h
 	DistributionInfo.h
+	DistributionTools.h
 	DUMUX.h
 	Eclipse.h
 	eos.h
@@ -56,6 +57,7 @@ set( SOURCES
 	CAP_IO.cpp
 	conversion_rate.cpp
 	DistributionInfo.cpp
+	DistributionTools.cpp
 	DUMUX.cpp
 	Eclipse.cpp
 	eos.cpp

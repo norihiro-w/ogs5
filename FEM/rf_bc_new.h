@@ -142,7 +142,8 @@ public:
 	}
 
 	int getExcav() {return bcExcav; }             //WX:12.2010 get bc excav model
-	int getExcavMatGr() {return MatGr; }     //WX:12.2010 get excav material group
+	int getExcavMatGr() const {return MatGr; }     //WX:12.2010 get excav material group
+	bool isMatGrSet() const {return is_MatGr_set;};
 	int getTimeContrCurve() {return time_contr_curve; } //WX:12.2010 get bc ativity controlled curve
 	int getNoDispIncre() {return NoDispIncre;};	//WX:12.2012
 
@@ -173,6 +174,7 @@ private:
 
 	std::string fname; //27.02.2009. WW
 	int _curve_index; // Time function index
+    std::string ele_interpo_method; //NW
 
 	// DIS
 	std::vector<long> node_number_vector;
@@ -184,9 +186,12 @@ private:
 	double _periode_time_length; // JOD
 	bool _periodic; // JOD
 
+public:
 	double gradient_ref_depth; // 6/2012 JOD
 	double gradient_ref_depth_value;
 	double gradient_ref_depth_gradient;
+	std::string interpolation_method;
+	int TimeInterpolation;
 
 	double node_value_cond; //OK
 	double condition; //OK
@@ -207,6 +212,7 @@ private:
 	//19.03.2009. WW
 	inline void PatchAssign(long ShiftInNodeVector);
 
+	void SetByElementValues(long); //NW
 	// MSH
 	long _msh_node_number;
 	std::string _msh_type_name; //OK4105
@@ -233,7 +239,7 @@ private:
 
 	bool _isSwitchBC;
 	SwitchBC _switchBC;
-
+	bool is_MatGr_set;
 };
 
 class CBoundaryConditionNode                      //OK raus

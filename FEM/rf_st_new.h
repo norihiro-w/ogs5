@@ -210,6 +210,18 @@ public:
 
 	  std::vector<long> st_node_ids;
 
+	FiniteElement::SourceTermType st_type;
+	FiniteElement::SourceTermType getSTType() const {return st_type;}
+
+	size_t getMeshNodeNumber() const
+	{
+		return msh_node_number;
+	}
+	const std::string& getMeshTypeName() const
+	{
+		return msh_type_name;
+	}
+
 private:                                          // TF, KR
 	void ReadDistributionType(std::ifstream* st_file);
 	void ReadGeoType(std::ifstream* st_file,
@@ -235,8 +247,9 @@ private:                                          // TF, KR
 	int fct_method;
 	std::string fct_name;
 
+public:
 	LinearFunctionData* dis_linear_f;     //24.8.2011. WW
-
+private:
 	bool analytical;                      //2x?
 	bool pressureBoundaryCondition; // pressure load boundary condition
 
@@ -287,6 +300,10 @@ private:                                          // TF, KR
 
 	std::size_t _st_vector_group;
 
+public:
+	double gradient_ref_depth;
+	double gradient_ref_depth_value;
+	double gradient_ref_depth_gradient;
 };
 
 class CSourceTermGroup
@@ -391,6 +408,9 @@ private:
 
 extern CSourceTermGroup* STGetGroup(std::string pcs_type_name,std::string pcs_pv_name);
 extern std::list<CSourceTermGroup*> st_group_list;
+
+class DistributionData;
+void setDistributionData(CSourceTerm* st, DistributionData &distData);
 
 /**
  * read source term file

@@ -40,6 +40,7 @@ using namespace std;
 #include "rfmat_cp.h"
 
 #include "InitialCondition.h"
+#include "tools.h"
 
 //==========================================================================
 vector<CInitialConditionGroup*>ic_group_vector;
@@ -63,6 +64,7 @@ CInitialCondition::CInitialCondition() : dis_linear_f(NULL)
 	this->setProcess(NULL);               //OK
 
 	m_msh = NULL;                         //OK
+	ele_interpo_method = "AVERAGE"; //NW
 }
 
 // KR: Conversion from GUI-IC-object to CInitialCondition
@@ -342,6 +344,11 @@ ios::pos_type CInitialCondition::Read(std::ifstream* ic_file,
 				in >> fname;
 				fname = FilePath + fname;
 			}
+			else if (this->getProcessDistributionType() == FiniteElement::ELEMENT)
+			{
+				in >> fname >> ele_interpo_method;
+				fname = FilePath + fname;
+			}
 			in.clear();
 			continue;
 		}
@@ -503,9 +510,10 @@ void CInitialCondition::Write(fstream* ic_file) const
 **************************************************************************/
 void CInitialCondition::Set(int nidx)
 {
-	if (getProcessDistributionType() == FiniteElement::DIRECT) //NW recover
-
+	if (getProcessDistributionType() == FiniteElement::DIRECT)
 		SetByNodeIndex(nidx);
+	else if (getProcessDistributionType() == FiniteElement::ELEMENT)
+		SetByElementValues(nidx);
 	else
 	{
 		switch(getGeoType())
@@ -570,6 +578,65 @@ void CInitialCondition::SetByNodeIndex(int nidx)
 
 		this->getProcess()->SetNodeValue(node_index,nidx,node_val);
 	}
+}
+
+/**************************************************************************
+   FEMLib-Method:
+   Task:
+   Programing:
+   05/2012 NW Implementation
+**************************************************************************/
+void CInitialCondition::SetByElementValues(int nidx)
+{
+    // File handling
+    ifstream d_file (fname.c_str(),ios::in);
+    if (!d_file.is_open())
+    {
+        cout << "! Error in CInitialCondition::SetByElementValues(): Could not find file " << fname << endl;
+        abort();
+    }
+
+    CRFProcess* pcs = this->getProcess();
+    //MeshLib::CFEMesh* msh = pcs->m_msh;
+    // read element values
+    std::vector<long> ic_ele_ids;
+    std::map<long, double> map_eleId_values;
+    string line_string;
+    std::stringstream in;
+    size_t ele_id;
+    double val;
+    while (!d_file.eof())
+    {
+        line_string = GetLineFromFile1(&d_file);
+        if(line_string.find("#STOP") != string::npos)
+            break;
+
+        in.str(line_string);
+        in >> ele_id >> val;
+        ic_ele_ids.push_back(ele_id);
+        map_eleId_values[ele_id] = val;
+        in.clear();
+    }
+
+    //// interpolate nodal values
+    //std::vector<double> vec_nod_values;
+    //convertElementDataToNodalData(*pcs, bc_ele_ids, bc_ele_values, EleToNodeInterpolationMethod::VOLUME_WEIGHTED, vec_nod_values);
+
+    // get a list of nodes connecting elements
+    std::vector<long> vec_nodes;
+    pcs->m_msh->GetNODOnELE(ic_ele_ids, vec_nodes);
+
+    // set IC
+    const size_t n_nodes = vec_nodes.size();
+    EleToNodeInterpolationMethod::type iterpo_type = EleToNodeInterpolationMethod::VOLUME_WEIGHTED;
+    if (ele_interpo_method.find("SHAPE")!=std::string::npos) {
+        iterpo_type = EleToNodeInterpolationMethod::GAUSS_EXTRAPOLATION;
+    }
+    for (size_t i=0; i<n_nodes; i++) {
+        long nod_id = vec_nodes[i];
+        double v = getNodalValueFromElementValue(*pcs, map_eleId_values, iterpo_type, nod_id);
+        pcs->SetNodeValue(nod_id, nidx, v);
+    }
 }
 
 /**************************************************************************
@@ -934,7 +1001,7 @@ void CInitialCondition::SetDomain(int nidx)
 				}
 			}
 			//....................................................................
-			delete var_n;
+			delete [] var_n;
 			var_name.clear();
 		}
 		//----------------------------------------------------------------------
@@ -1001,7 +1068,7 @@ void CInitialCondition::SetDomain(int nidx)
 					        m_msh->nod_vector[nodes_vector[i]]->getData());
 					getProcess()->SetNodeValue(nodes_vector[i],
 					                           nidx,
-					                           dis_linear_f->getValue(k, pnt[0],
+					                           dis_linear_f->getValue(subdom_index[k], pnt[0],
 					                                                  pnt[1],
 					                                                  pnt[2]));
 				}

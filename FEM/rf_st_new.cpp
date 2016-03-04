@@ -79,6 +79,9 @@
 
 #include "SourceTerm.h"
 
+#include "DistributionTools.h"
+#include "FEMEnums.h"
+
 using FiniteElement::CElement;
 using MeshLib::CElem;
 using MeshLib::CEdge;
@@ -513,6 +516,15 @@ void CSourceTerm::ReadDistributionType(std::ifstream *st_file)
    in.str(GetLineFromFile1(st_file));
    in >> dis_type_name;
 
+   std::size_t found = dis_type_name.find("_NEUMANN");
+   if (found!=std::string::npos) {
+      this->st_type = FiniteElement::NEUMANN;
+      dis_type_name.erase(dis_type_name.begin()+found, dis_type_name.end());
+      ScreenMessage("-> This ST is recognized as Neumann BC\n");
+   } else {
+	   this->st_type = FiniteElement::SOURCE;
+   }
+
    this->setProcessDistributionType (FiniteElement::convertDisType(dis_type_name));
 
    if (dis_type_name.compare (convertDisTypeToString (this->getProcessDistributionType())) != 0)
@@ -688,7 +700,14 @@ if (this->getProcessDistributionType() == FiniteElement::CLIMATE)
 	   in.clear();
    }
 
-
+	if (this->getProcessDistributionType() == FiniteElement::GRADIENT)
+	{
+	      dis_type_name = "GRADIENT";
+		in >> gradient_ref_depth;
+		in >> gradient_ref_depth_value;
+		in >> gradient_ref_depth_gradient;
+		in.clear();
+	}
 }
 
 
@@ -1064,6 +1083,39 @@ void CSourceTerm::Write(std::fstream* st_file)
 //	// if(dis_type_name.compare("LINEAR")  ==0) dis_type = 1;
 //}
 
+void setDistributionData(CSourceTerm* st, DistributionData &distData)
+{
+	distData.dis_type = st->getProcessDistributionType();
+	distData.geo_obj = st->getGeoObj();
+	distData.geo_name = st->getGeoName();
+	distData.geo_type = st->getGeoType();
+	switch (st->getProcessDistributionType()) {
+	case FiniteElement::CONSTANT:
+	case FiniteElement::CONSTANT_NEUMANN:
+		distData.dis_parameters.push_back(st->getGeoNodeValue());
+		break;
+	case FiniteElement::LINEAR:
+	case FiniteElement::LINEAR_NEUMANN:
+		distData._DistribedBC = st->getDistribedST();
+		distData._PointsHaveDistribedBC = st->getPointsWithDistribedST();
+		break;
+	case FiniteElement::GRADIENT:
+		distData.dis_parameters.push_back(st->gradient_ref_depth);
+		distData.dis_parameters.push_back(st->gradient_ref_depth_value);
+		distData.dis_parameters.push_back(st->gradient_ref_depth_gradient);
+		break;
+	case FiniteElement::FUNCTION:
+		distData.linear_f = st->dis_linear_f;
+		break;
+	default:
+		break;
+	}
+	distData.mesh_type_name = st->getMeshTypeName();
+	if (st->getMeshTypeName()=="NODE") {
+		distData.mesh_node_id = st->getMeshNodeNumber();
+	}
+}
+
 /**************************************************************************
  FEMLib-Method:
  Task: set ST group member
@@ -1080,61 +1132,66 @@ void CSourceTerm::Write(std::fstream* st_file)
 void CSourceTermGroup::Set(CRFProcess* m_pcs, const int ShiftInNodeVector,
 		std::string this_pv_name)
 {
-  bool set = false; // CB
+	m_msh = FEMGet(pcs_type_name);
+	if (!m_msh) {
+		std::cout << "Warning in CSourceTermGroup::Set - no MSH data" << std::endl;
+		return;
+	}
 
-   if (this_pv_name.size() != 0)                  //WW
-      pcs_pv_name = this_pv_name;
-   m_msh = FEMGet(pcs_type_name);                 //m_pcs->m_msh; //
+	if (this_pv_name.size() != 0)                  //WW
+		pcs_pv_name = this_pv_name;
+	const FiniteElement::ProcessType pcs_type = FiniteElement::convertProcessType(pcs_type_name);
+	const FiniteElement::PrimaryVariable pcs_pv_type = FiniteElement::convertPrimaryVariable(pcs_pv_name);
 
-   if (m_msh)                                     //WW
-   {
-      /// In case of P_U coupling monolithic scheme
-      if (m_pcs->type == 41)                      //WW Mono
-      {
-                                                  //Deform
-         if (pcs_pv_name.find("DISPLACEMENT") != std::string::npos)
-            m_pcs->m_msh->SwitchOnQuadraticNodes(true);
-         else
-            m_pcs->m_msh->SwitchOnQuadraticNodes(false);
-      } else if (m_pcs->type == 4)
-      m_pcs->m_msh->SwitchOnQuadraticNodes(true);
-      else
-         m_pcs->m_msh->SwitchOnQuadraticNodes(false);
-      //====================================================================
-      long no_st = (long) st_vector.size();
-      for (long i = 0; i < no_st; i++)
-      {
-         CSourceTerm *source_term (st_vector[i]);
-         if(m_pcs->getProcessType() != source_term->getProcessType() )
-            continue;
 
-         source_term->setSTVectorGroup(i);
+	// In case of P_U coupling monolithic scheme
+	bool isQuadratic = false;
+	if (m_pcs->type == 41)                      //WW Mono
+	{
+		if (pcs_pv_name.find("DISPLACEMENT") != std::string::npos)
+			isQuadratic = true;
+	}
+	else if (m_pcs->type == 4)
+	{
+		isQuadratic = true;
+	}
+	m_pcs->m_msh->SwitchOnQuadraticNodes(isQuadratic);
 
-         // 07.01.2011. WW
-         if(source_term->getProcessDistributionType()==FiniteElement::PRECIPITATION)
-            continue;
+	//====================================================================
+	bool set = false; // CB
+	const size_t no_st = st_vector.size();
+	m_pcs->st_node_value.resize(no_st);
+	for (size_t i = 0; i < no_st; i++)
+	{
+		CSourceTerm *source_term (st_vector[i]);
+		CSourceTerm *st = source_term;
+		if(m_pcs->getProcessType() != source_term->getProcessType() )
+			continue;
+		if (st->getProcessType() != pcs_type) continue;
+		if (st->getProcessPrimaryVariable() != pcs_pv_type
+			&& st->getProcessPrimaryVariable() != FiniteElement::CONCENTRATION)
+			continue;
+		if(st->getProcessDistributionType()==FiniteElement::PRECIPITATION)
+			continue;
 
-         if (source_term->isCoupled())
-            m_msh_cond = FEMGet(source_term->pcs_type_name_cond);
+		source_term->setSTVectorGroup(i);
 
-         if (source_term->getProcessType() == FiniteElement::MASS_TRANSPORT)
-             //if ( cp_vec[cp_name_2_idx[convertPrimaryVariableToString(source_term->getProcessPrimaryVariable())]]->getProcess() != m_pcs )
-             if ( cp_vec[source_term->getProcessCompVecIndex()]->getProcess() != m_pcs ) //CB cannot match CONCENTRATION with comp name!!
-                 continue;
-          //-- 23.02.3009. WW
-         if (source_term->getProcessDistributionType()==FiniteElement::DIRECT
-        		 || source_term->getProcessDistributionType()==FiniteElement::CLIMATE)
-		 { //NB For climate ST, the source terms (recharge in this case) will also be assigned directly to surface nodes
-           source_term->DirectAssign(ShiftInNodeVector);
-           continue;
-         }
+		if (source_term->getProcessType() == FiniteElement::MASS_TRANSPORT)
+			//if ( cp_vec[cp_name_2_idx[convertPrimaryVariableToString(source_term->getProcessPrimaryVariable())]]->getProcess() != m_pcs )
+			if ( cp_vec[source_term->getProcessCompVecIndex()]->getProcess() != m_pcs ) //CB cannot match CONCENTRATION with comp name!!
+				continue;
 
-         if (source_term->getProcessDistributionType()==FiniteElement::RECHARGE_DIRECT)
-         {
-        	 source_term->DirectAssign(ShiftInNodeVector);
-        	 set = true;
-         }
+		//-- 23.02.3009. WW
+		if (source_term->getProcessDistributionType()==FiniteElement::DIRECT
+		     || source_term->getProcessDistributionType()==FiniteElement::CLIMATE
+		     || source_term->getProcessDistributionType()==FiniteElement::RECHARGE_DIRECT)
+		{ //NB For climate ST, the source terms (recharge in this case) will also be assigned directly to surface nodes
+			source_term->DirectAssign(ShiftInNodeVector);
+			set = true;
+			continue;
+		}
 
+#if 0
          //CB cannot match CONCENRATION with comp name!!
          // modified to fix bug with MASS_TRANSPORT
          if (convertProcessTypeToString (source_term->getProcessType ()).compare(pcs_type_name) == 0)
@@ -1179,10 +1236,62 @@ void CSourceTermGroup::Set(CRFProcess* m_pcs, const int ShiftInNodeVector,
 				MshEditor::sortNodesLexicographically(m_pcs->m_msh);
 
          }                                        // end pcs name & pv
-      }                                           // end st loop
-   }                                              // end msh
-   else
-      std::cout << "Warning in CSourceTermGroup::Set - no MSH data" << "\n";
+#endif
+
+		if (source_term->isCoupled())
+			m_msh_cond = FEMGet(source_term->pcs_type_name_cond);
+
+		DistributionData distData;
+		setDistributionData(st, distData);
+		//------------------------------------------------------------------
+		// Detect mesh nodes for this ST
+		//------------------------------------------------------------------
+		std::vector<long> nodes_vector;
+		nodes_vector.clear();
+		getNodesOnDistribution(distData, *m_msh, nodes_vector);
+		//------------------------------------------------------------------
+		// Calculate ST values
+		//------------------------------------------------------------------
+		std::vector<double> node_value;
+		node_value.resize(nodes_vector.size());
+		setDistribution(distData, *m_msh, nodes_vector, node_value);
+		//------------------------------------------------------------------
+		// Calculate integrated values
+		//------------------------------------------------------------------
+		if (source_term->getSTType()==FiniteElement::NEUMANN)
+		{
+			if (source_term->getGeoType()==GEOLIB::POINT) {
+				node_value[0] *= 1; //source_term->transfer_h_values[0];
+			} else if (m_msh->GetMaxElementDim() == 2 && source_term->getGeoType()==GEOLIB::POLYLINE) {
+				source_term->EdgeIntegration(m_msh, nodes_vector, node_value);
+			} else if (m_msh->GetMaxElementDim() == 3 && source_term->getGeoType()==GEOLIB::SURFACE) {
+				source_term->FaceIntegration(m_msh, nodes_vector, node_value);
+			} else if (st->getGeoType()==GEOLIB::GEODOMAIN
+					|| (m_msh->GetMaxElementDim() == 1 && source_term->getGeoType()==GEOLIB::POLYLINE)
+					|| (m_msh->GetMaxElementDim() == 2 && source_term->getGeoType()==GEOLIB::SURFACE)
+					) {
+				source_term->DomainIntegration(m_msh, nodes_vector, node_value);
+			}
+		}
+		else if (source_term->getProcessDistributionType() == FiniteElement::CRITICALDEPTH
+				|| st->getProcessDistributionType() == FiniteElement::NORMALDEPTH
+				|| st->getProcessDistributionType() == FiniteElement::ANALYTICAL)
+		{
+			st->node_value_vectorArea.resize(nodes_vector.size());
+			for (size_t i = 0; i < st->node_value_vectorArea.size(); i++)
+				st->node_value_vectorArea[i] = 1.0; //Element width !
+			st->EdgeIntegration(m_msh, nodes_vector, st->node_value_vectorArea);
+		}
+
+
+		//------------------------------------------------------------------
+		// create ST node
+		//------------------------------------------------------------------
+		std::vector<long> nodes_cond;
+		printf("-> Create ST nodes%s\n", "");
+		st->SetNodeValues(nodes_vector, nodes_cond, node_value, ShiftInNodeVector);
+    }                                           // end st loop
+
 
 }
 
@@ -3754,6 +3863,13 @@ void CSourceTermGroup::SetPolylineNodeValueVector(CSourceTerm* st,
          ply_nod_val_vector[i] = st->dis_linear_f->getValue(pnt[0], pnt[1], pnt[2]);
       }
    }
+   else if (distype == FiniteElement::GRADIENT) //NW
+	{
+		for (size_t i(0); i < number_of_nodes; i++) {
+			double z = m_msh->nod_vector[ply_nod_vector[i]]->getData()[2];
+			ply_nod_val_vector[i] = st->gradient_ref_depth_gradient * (st->gradient_ref_depth - z) + st->gradient_ref_depth_value;
+		}
+	}
 	else //WW
 	{
 		for (size_t i = 0; i < number_of_nodes; i++) {
